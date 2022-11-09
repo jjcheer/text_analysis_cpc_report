@@ -1,0 +1,142 @@
+---
+title: "text_analysis_cpc_congress_report"
+author: "jjcheer"
+date: "2022-11-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Target
+
+In this document, I'll crawl the content of the CPC congress report from the year 1977 (the 11th congress) to the year 2022 (the 20th congress). Using text analysis to compare the key words in each of the report to differentiate the key points in each of the 5 year interval.
+
+## load pkgs
+
+```{r}
+library(tidyverse) # proving the pipe and facilitate the manipulation
+library(rvest) # web crawl and parse
+library(jiebaR) # Chinese word seperation.
+library(wordcloud2) # word cloud
+library(webshot) # use this pkg to store the word cloud in local
+library(htmlwidgets) # use this pkg to store the word cloud in local
+library(tidytext) # untoken the words, and generate tf-idf
+library(ggh4x) # draw enhanced plots.
+```
+
+## The urls
+
+Find the webpages which provides the content of the report, and stored in a tibble. Add a id column which denote the abbreviation of each of the congress. e.g., id = 11 means "shi yi da".(the eleventh congress)
+
+```{r}
+ccp_link <- tibble(
+  id = c(11,12,13,14,15,16,17,18,19,20),
+  p_link = c("https://fuwu.12371.cn/2012/09/25/ARTI1348541192153839.shtml",
+             "https://fuwu.12371.cn/2012/09/27/ARTI1348712095996447.shtml",
+             "https://fuwu.12371.cn/2012/09/25/ARTI1348562562473415.shtml",
+             "https://fuwu.12371.cn/2012/09/26/ARTI1348641194361954.shtml",
+             "https://fuwu.12371.cn/2012/09/27/ARTI1348726215537612.shtml",
+             "https://fuwu.12371.cn/2012/09/27/ARTI1348734708607117.shtml",
+             "https://fuwu.12371.cn/2012/06/11/ARTI1339412115437623.shtml",
+             "https://www.12371.cn/2012/11/17/ARTI1353154601465336_all.shtml",
+             "https://www.12371.cn/2017/10/27/ARTI1509103656574313.shtml",
+             "https://www.12371.cn/2022/10/25/ARTI1666705047474465.shtml")
+)
+```
+
+crawl the website, and store the content in the `p_content` column.
+
+```{r}
+ccp_report <- tibble(
+  p_id = NULL,
+  p_content = NULL
+)
+
+for (i in 1:10) {
+  ccp_html <- read_html(ccp_link$p_link[i]) 
+  (p_content <- ccp_html %>% 
+      html_elements(".word") %>% 
+      html_text2())
+  
+  ccp_report_row <- tibble(
+    p_id = ccp_link$id[i],
+    p_content
+  )
+  ccp_report <- rbind(ccp_report,ccp_report_row)
+}
+
+ccp_report
+```
+
+## Word cloud 
+
+define the stop words you want to delete.
+```{r}
+stop_words_chinese <- tibble(
+  words = c("的","地","得","和","要","我们",
+            "是","了","中国","在"))
+```
+
+draw the word cloud of each of the congress report.
+
+```{r}
+for (i in 1:10) {
+
+  tibble(segment(ccp_report$p_content[i],worker()))
+  ccp_words <- tibble(segment(ccp_report$p_content[i],worker())) %>% 
+  rename(words = `segment(ccp_report$p_content[i], worker())`)
+  
+  ccp_clean <- anti_join(ccp_words,stop_words_chinese)
+  
+  wordcloud2(freq(ccp_clean$words),shape = "star")
+}
+```
+
+## the key words in each of the report, by tf-idf
+
+Using `tf-idf`, get the key words in each of the report; Drawing the lollipops.
+
+```{r}
+wk <- worker()
+ccp_corpus <- 
+ccp_report %>% 
+  mutate(words = map(p_content,segment,jieba = wk)) %>% 
+  select(p_id,words)
+
+ccp_table <-
+ccp_corpus %>% 
+  unnest(cols = c(words)) %>% 
+  count(p_id, words)
+
+## load tidytext, caculate tf-idf
+library(tidytext)
+
+ccp_tf_idf <- 
+ccp_table %>% 
+  bind_tf_idf(term = words, document = p_id, n = n )
+
+## the keywords in each document
+ccp_top10 <- 
+ccp_tf_idf %>% 
+  group_by(p_id) %>% 
+  top_n(10,tf_idf) %>% 
+  ungroup()
+
+ccp_top10 %>%
+  mutate(words = fct_reorder(words,n)) %>% 
+  ggplot(aes(n,words)) %>% +
+  geom_segment(aes(x = 0,
+                   xend = n,
+                   y= words,
+                   yend = words)) +
+  geom_point(shape = 21, size = 3, colour = "black", fill = "#FC4E07") +
+  ggh4x::facet_wrap2(~ p_id,ncol = 5,scales = "free")+
+  theme(text = element_text(family = "Songti SC"),
+        axis.title=element_text(size=13,face="plain",color="black"),
+        axis.text = element_text(size=10,face="plain",color="black"),
+        legend.title=element_text(size=14,face="plain",color="black")
+  )
+```
+
